@@ -1,0 +1,23 @@
+
+{
+  "name": "BeerBelly",
+  "short_name": "BeerBelly",
+  "start_url": "https://swaip.se/beerbelly/home",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "description": "Share workouts and beer-moments",
+  "icons": [
+    {
+      "src": "https://rgltnpheklpbfnynxsiu.supabase.co/storage/v1/object/public/TableBookings/tablebookings-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://rgltnpheklpbfnynxsiu.supabase.co/storage/v1/object/public/TableBookings/tablebookings-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
