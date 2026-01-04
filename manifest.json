@@ -10,13 +10,8 @@
   "description": "Share workouts and beer-moments",
   "icons": [
     {
-      "src": "https://rgltnpheklpbfnynxsiu.supabase.co/storage/v1/object/public/TableBookings/tablebookings-192.png",
-      "sizes": "192x192",
-      "type": "image/png"
-    },
-    {
-      "src": "https://rgltnpheklpbfnynxsiu.supabase.co/storage/v1/object/public/TableBookings/tablebookings-512.png",
-      "sizes": "512x512",
+      "src": "https://cdn.prod.website-files.com/68e01de2e7d9d52f889935ed/695a5796516b6914390fe9ef_EA339E66-CA1B-452C-90AA-2A9E685C.png",
+      "sizes": "180x180",
       "type": "image/png"
     }
   ]
