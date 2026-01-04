@@ -1,0 +1,8 @@
+{
+  "functions": {
+    "api/upload_workout.js": {
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  }
+}
