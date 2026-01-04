@@ -1,5 +1,6 @@
 const Busboy = require("busboy");
 const { createClient } = require("@supabase/supabase-js");
+const crypto = require("crypto");
 
 function getBearerToken(req) {
   const auth = req.headers.authorization || "";
@@ -23,13 +24,15 @@ function parseTagIds(raw) {
 
 function readMultipart(req) {
   return new Promise((resolve, reject) => {
-    const bb = Busboy({ headers: req.headers, limits: { files: 1, fileSize: 250 * 1024 * 1024 } });
+    const bb = Busboy({
+      headers: req.headers,
+      limits: { files: 1, fileSize: 250 * 1024 * 1024 }
+    });
 
     const fields = {};
     let file = null;
 
     bb.on("field", (name, val) => {
-      // samla repeated fields som array
       if (fields[name] === undefined) fields[name] = val;
       else if (Array.isArray(fields[name])) fields[name].push(val);
       else fields[name] = [fields[name], val];
@@ -45,7 +48,9 @@ function readMultipart(req) {
         chunks.push(d);
       });
 
-      stream.on("limit", () => reject(Object.assign(new Error("File too large"), { status: 413 })));
+      stream.on("limit", () =>
+        reject(Object.assign(new Error("File too large"), { status: 413 }))
+      );
       stream.on("error", reject);
 
       stream.on("end", () => {
@@ -67,30 +72,30 @@ function readMultipart(req) {
 }
 
 function randomId() {
-  // node crypto random UUID if available
-  return (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(16).slice(2) + Date.now();
+  return crypto.randomUUID
+    ? crypto.randomUUID()
+    : Math.random().toString(16).slice(2) + Date.now();
 }
 
 module.exports = async (req, res) => {
-  // CORS (om du behöver anropa från din frontend-domän)
-  const origin = req.headers.origin || "";
-  const allowed = (process.env.ALLOWED_ORIGINS || "")
-    .split(",")
-    .map(s => s.trim())
-    .filter(Boolean);
-
-  if (allowed.length) {
-    if (allowed.includes(origin)) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Vary", "Origin");
-      res.setHeader("Access-Control-Allow-Credentials", "true");
-    }
-    res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
-  }
+  // --- OPEN CORS (debug only) ---
+  // NOTE: With "*" you cannot use credentials. We don't need credentials here.
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
 
   if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+
+  // Simple GET smoke test: open this URL in browser and see text
+  if (req.method === "GET") {
+    return res
+      .status(200)
+      .send("upload_workout is alive (GET ok). Use POST with multipart/form-data to upload.");
+  }
+
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
 
   try {
     const jwt = getBearerToken(req);
@@ -106,49 +111,63 @@ module.exports = async (req, res) => {
 
     const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Verifiera user via JWT
+    // Verify user via JWT
     const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(jwt);
-    if (userErr || !userData?.user) return res.status(401).json({ error: "Invalid token" });
+    if (userErr || !userData?.user) {
+      return res.status(401).json({ error: "Invalid token", detail: userErr?.message });
+    }
     const uid = userData.user.id;
 
-    // Läs multipart
+    // Parse multipart
     const { fields, file } = await readMultipart(req);
     if (!file) return res.status(400).json({ error: "Missing file" });
 
     const description = (fields.description || "").toString().trim() || null;
     const tag_ids = parseTagIds(fields.tag_ids);
-
     if (!tag_ids.length) return res.status(400).json({ error: "Select at least one tag" });
 
     const isVideo = (file.mimetype || "").startsWith("video/");
     const isImage = (file.mimetype || "").startsWith("image/");
     if (!isVideo && !isImage) return res.status(400).json({ error: "Unsupported file type" });
 
-    // Namn/extension
-    const ext = isVideo ? ".mp4" : (file.filename.includes(".") ? "." + file.filename.split(".").pop() : ".jpg");
+    // Extension
+    const ext = isVideo
+      ? ".mp4"
+      : (file.filename.includes(".") ? "." + file.filename.split(".").pop() : ".jpg");
+
     const id = randomId();
     const storagePath = `${uid}/${Date.now()}-${id}${ext}`;
 
-    // Upload till Storage
+    // Upload to Storage
     const { error: upErr } = await supabaseAdmin.storage
       .from(BUCKET)
-      .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: false });
+      .upload(storagePath, file.buffer, {
+        contentType: file.mimetype,
+        upsert: false
+      });
 
-    if (upErr) return res.status(500).json({ error: "Storage upload failed", detail: upErr.message });
+    if (upErr) {
+      return res.status(500).json({ error: "Storage upload failed", detail: upErr.message });
+    }
 
-    // DB insert: anpassa kolumnnamn efter din tabell:
-    // Om du idag använder file_url: byt file_path -> file_url och sätt en signed url istället.
+    // Insert workout (NOTE: expects column file_path exists)
     const { data: w, error: wErr } = await supabaseAdmin
       .from("workouts")
       .insert({ user_id: uid, file_path: storagePath, description })
       .select("id")
       .single();
 
-    if (wErr || !w?.id) return res.status(500).json({ error: "DB insert workouts failed", detail: wErr?.message || "Unknown" });
+    if (wErr || !w?.id) {
+      return res.status(500).json({ error: "DB insert workouts failed", detail: wErr?.message || "Unknown" });
+    }
 
+    // Insert tags
     const rows = tag_ids.map(tag_id => ({ workout_id: w.id, tag_id }));
     const { error: wtErr } = await supabaseAdmin.from("workout_tags").insert(rows);
-    if (wtErr) return res.status(500).json({ error: "DB insert workout_tags failed", detail: wtErr.message });
+
+    if (wtErr) {
+      return res.status(500).json({ error: "DB insert workout_tags failed", detail: wtErr.message });
+    }
 
     return res.json({ ok: true, workoutId: w.id, file_path: storagePath });
   } catch (e) {
@@ -157,7 +176,6 @@ module.exports = async (req, res) => {
   }
 };
 
-// Vercel: stäng av body parser
 module.exports.config = {
   api: {
     bodyParser: false
