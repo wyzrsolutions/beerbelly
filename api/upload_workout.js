@@ -79,14 +79,13 @@ function randomId() {
 
 module.exports = async (req, res) => {
   // --- OPEN CORS (debug only) ---
-  // NOTE: With "*" you cannot use credentials. We don't need credentials here.
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
 
   if (req.method === "OPTIONS") return res.status(204).end();
 
-  // Simple GET smoke test: open this URL in browser and see text
+  // Simple GET smoke test
   if (req.method === "GET") {
     return res
       .status(200)
@@ -111,7 +110,7 @@ module.exports = async (req, res) => {
 
     const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Verify user via JWT
+    // Verify user
     const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(jwt);
     if (userErr || !userData?.user) {
       return res.status(401).json({ error: "Invalid token", detail: userErr?.message });
@@ -130,30 +129,41 @@ module.exports = async (req, res) => {
     const isImage = (file.mimetype || "").startsWith("image/");
     if (!isVideo && !isImage) return res.status(400).json({ error: "Unsupported file type" });
 
-    // Extension
-    const ext = isVideo
-      ? ".mp4"
-      : (file.filename.includes(".") ? "." + file.filename.split(".").pop() : ".jpg");
+    // Extension: keep image ext, force mp4 for video
+    let ext = ".bin";
+    if (isVideo) ext = ".mp4";
+    else {
+      const parts = (file.filename || "").split(".");
+      ext = parts.length > 1 ? "." + parts.pop().toLowerCase() : ".jpg";
+    }
 
-    const id = randomId();
-    const storagePath = `${uid}/${Date.now()}-${id}${ext}`;
+    const storagePath = `${uid}/${Date.now()}-${randomId()}${ext}`;
 
     // Upload to Storage
     const { error: upErr } = await supabaseAdmin.storage
       .from(BUCKET)
-      .upload(storagePath, file.buffer, {
-        contentType: file.mimetype,
-        upsert: false
-      });
+      .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: false });
 
     if (upErr) {
       return res.status(500).json({ error: "Storage upload failed", detail: upErr.message });
     }
 
-    // Insert workout (NOTE: expects column file_path exists)
+    // Create signed URL (100 years like before)
+    const exp = 100 * 365 * 24 * 60 * 60;
+    const { data: signed, error: sErr } = await supabaseAdmin.storage
+      .from(BUCKET)
+      .createSignedUrl(storagePath, exp);
+
+    if (sErr || !signed?.signedUrl) {
+      return res.status(500).json({ error: "Signed URL failed", detail: sErr?.message || "Missing signedUrl" });
+    }
+
+    const file_url = signed.signedUrl;
+
+    // Insert workout (matches your existing schema)
     const { data: w, error: wErr } = await supabaseAdmin
       .from("workouts")
-      .insert({ user_id: uid, file_path: storagePath, description })
+      .insert({ user_id: uid, file_url, description })
       .select("id")
       .single();
 
@@ -169,7 +179,7 @@ module.exports = async (req, res) => {
       return res.status(500).json({ error: "DB insert workout_tags failed", detail: wtErr.message });
     }
 
-    return res.json({ ok: true, workoutId: w.id, file_path: storagePath });
+    return res.json({ ok: true, workoutId: w.id, file_url });
   } catch (e) {
     const status = e?.status || 500;
     return res.status(status).json({ error: "Upload failed", detail: String(e?.message || e) });
@@ -177,7 +187,5 @@ module.exports = async (req, res) => {
 };
 
 module.exports.config = {
-  api: {
-    bodyParser: false
-  }
+  api: { bodyParser: false }
 };
